@@ -1,24 +1,27 @@
-#include "stdafx.h"
+#include "pch.h"
 
-#include "webrtc.h"
-#include "webrtcH264.h"
-#include "third_party\libyuv\include\libyuv.h"
-#include "CppUnitTest.h"
 #include <comdef.h>
 #include <comutil.h>
 #include <Wbemidl.h>
-#include <Windows.h>
 #include <wchar.h>
+#include <Windows.h>
 
-# pragma comment(lib, "wbemuuid.lib")
+#include "buffer_capturer.h"
+#include "third_party\libyuv\include\libyuv.h"
+#include "webrtc.h"
+#include "webrtcH264.h"
 
+#include "CppUnitTest.h"
+
+#pragma comment(lib, "wbemuuid.lib")
 
 using namespace Microsoft::VisualStudio::CppUnitTestFramework;
+using namespace StreamingToolkit;
 using namespace webrtc;
 
 namespace NativeServersUnitTests
 {		
-	TEST_CLASS(UnitTest1)
+	TEST_CLASS(EncoderTests)
 	{
 	public:
 		TEST_METHOD(CanInitializeWithDefaultParameters)
@@ -173,8 +176,8 @@ namespace NativeServersUnitTests
 			VariantClear(&driverNumber);
 		}
 
-		TEST_METHOD(HardwareNvencodeEncode) {
-
+		TEST_METHOD(HardwareNvencodeEncode) 
+		{
 			auto h264TestImpl = new H264TestImpl();
 			h264TestImpl->SetEncoderHWEnabled(true);
 			rtc::scoped_refptr<webrtc::VideoFrameBuffer> buffer(
@@ -211,6 +214,16 @@ namespace NativeServersUnitTests
 
 			delete[] rgbBuffer;
 			rgbBuffer = NULL;
+		}
+	};
+
+	TEST_CLASS(BufferCapturerTests)
+	{
+	public:
+		TEST_METHOD(CanInitializeWithDefaultParameters)
+		{
+			auto bufferCapturer = new BufferCapturer();
+			Assert::IsNotNull(bufferCapturer);
 		}
 	};
 }
