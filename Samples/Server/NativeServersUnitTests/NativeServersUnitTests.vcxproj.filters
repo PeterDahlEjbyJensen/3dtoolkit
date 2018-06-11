@@ -27,6 +27,9 @@
     <ClInclude Include="webrtc.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="..\..\..\Libraries\WebRTC\headers\third_party\nvpipe\nvpipe.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="stdafx.cpp">

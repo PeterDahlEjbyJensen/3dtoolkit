@@ -213,7 +213,7 @@ namespace NativeServersUnitTests
 		TEST_METHOD(CanEncodeCorrectly) {
 
 			auto h264TestImpl = new H264TestImpl();
-			h264TestImpl->SetEncoderHWEnabled(true);
+			h264TestImpl->SetEncoderHWEnabled(true); //deprecated functionality, bool argument has no effect
 			rtc::scoped_refptr<webrtc::VideoFrameBuffer> buffer(
 				h264TestImpl->input_frame_.get()->video_frame_buffer());
 
