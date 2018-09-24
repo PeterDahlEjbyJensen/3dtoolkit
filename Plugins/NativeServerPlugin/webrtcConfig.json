@@ -1,12 +1,12 @@
 {
-  "iceConfiguration": "relay",
+  "iceConfiguration": "none",
   "turnServer": {
     "uri": "turn:turnserveruri:5349",
     "username": "username",
     "password": "password"
   },
-  "serverUri": "https://signalingserveruri",
-  "port": 443,
+  "serverUri": "http://localhost",
+  "port": 3000,
   "heartbeat": 5000,
   "authentication": {
     "authorityUri": "https://aadauthorityuri",

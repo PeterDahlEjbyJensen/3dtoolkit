@@ -3,21 +3,18 @@
 #include <stdlib.h>
 #include <shellapi.h>
 #include <fstream>
+#include <iostream>
 
 #include "macros.h"
 #include "CubeRenderer.h"
 #include "DeviceResources.h"
 
-#ifdef TEST_RUNNER
-#include "test_runner.h"
-#else // TEST_RUNNER
 #include "config_parser.h"
 #include "directx_multi_peer_conductor.h"
 #include "server_main_window.h"
 #include "server_renderer.h"
 #include "service/render_service.h"
 #include "webrtc.h"
-#endif // TEST_RUNNER
 
 // Position the cube two meters in front of user for image stabilization.
 #define FOCUS_POINT					-2.0f
@@ -36,29 +33,20 @@
 #pragma comment(lib, "d3d11.lib")
 #pragma comment(lib, "winmm.lib")
 
-#ifndef TEST_RUNNER
+
 using namespace Microsoft::WRL;
 using namespace Windows::Foundation::Numerics;
-#endif // TEST_RUNNER
+
 
 using namespace DX;
 using namespace StreamingToolkit;
 using namespace StreamingToolkitSample;
 
 //--------------------------------------------------------------------------------------
-// Forward declarations
-//--------------------------------------------------------------------------------------
-void StartRenderService();
-
-//--------------------------------------------------------------------------------------
 // Global Variables
 //--------------------------------------------------------------------------------------
 DeviceResources*					g_deviceResources = nullptr;
 CubeRenderer*						g_cubeRenderer = nullptr;
-#ifdef TEST_RUNNER
-HWND								g_hWnd = nullptr;
-VideoTestRunner*					g_videoTestRunner = nullptr;
-#else // TEST_RUNNER
 
 // Remote peer data
 struct RemotePeerData
@@ -113,9 +101,7 @@ struct RemotePeerData
 };
 
 std::map<int, std::shared_ptr<RemotePeerData>> g_remotePeersData;
-#endif // TESTRUNNER
-
-#ifndef TEST_RUNNER
+DirectXMultiPeerConductor* g_cond;
 
 void InitializeRenderTexture(RemotePeerData* peerData, int width, int height, bool isStereo)
 {
@@ -521,221 +507,157 @@ bool AppMain(BOOL stopping)
 	return 0;
 }
 
-//--------------------------------------------------------------------------------------
-// System service
-//--------------------------------------------------------------------------------------
-void StartRenderService()
+extern "C" 
 {
-	SC_HANDLE schSCManager = OpenSCManager(NULL, NULL, SC_MANAGER_CONNECT);
-	if (schSCManager)
+	__declspec(dllexport) void __stdcall  TestStreamingDLLInterface(ID3D11Device* device, ID3D11Texture2D* rt, 
+		void __stdcall MouseEventCallback(char*, char*))
 	{
-		// Init service's main function.
-		const std::function<void(BOOL*)> serviceMainFunc = [&](BOOL* stopping)
+
+		auto fullServerConfig = GlobalObject<FullServerConfig>::Get();
+		auto nvEncConfig = GlobalObject<NvEncConfig>::Get();
+		nvEncConfig->capture_fps = 60;
+
+		D3D11_TEXTURE2D_DESC desc;
+		rt->GetDesc(&desc);
+
+		if (fullServerConfig)
 		{
-			AppMain(*stopping);
-		};
+			fullServerConfig->webrtc_config = GlobalObject<StreamingToolkit::WebRTCConfig>::Get();
+			fullServerConfig->webrtc_config->server_uri = "http://localhost";
+			fullServerConfig->webrtc_config->port = 3000;
+			fullServerConfig->webrtc_config->ice_configuration = "none";
+			fullServerConfig->webrtc_config->heartbeat = 5000;
 
-		auto serverConfig = GlobalObject<ServerConfig>::Get();
-
-		RenderService service((PWSTR)serverConfig->service_config.name.c_str(), serviceMainFunc);
-
-		// Starts the service to run the app persistently.
-		if (!CServiceBase::Run(service))
-		{
-			wprintf(L"Service failed to run w/err 0x%08lx\n", GetLastError());
-			MessageBox(
-				NULL,
-				L"Service needs to be initialized using PowerShell scripts.",
-				L"Error",
-				MB_ICONERROR
-			);
+			fullServerConfig->server_config = GlobalObject<StreamingToolkit::ServerConfig>::Get();
+			fullServerConfig->server_config->server_config.width = desc.Width;
+			fullServerConfig->server_config->server_config.height = desc.Height;
+			fullServerConfig->server_config->server_config.system_capacity = -1;
+			fullServerConfig->server_config->server_config.system_service = false;
+			fullServerConfig->server_config->server_config.auto_call = false;
+			fullServerConfig->server_config->server_config.auto_connect = false;
 		}
 
-		CloseServiceHandle(schSCManager);
-		schSCManager = NULL;
+		
+		rtc::EnsureWinsockInit();
+		rtc::Win32Thread w32_thread;
+		rtc::ThreadManager::Instance()->SetCurrentThread(&w32_thread);
+
+		/*
+		// Initializes the device resources.
+		g_deviceResources = new DeviceResources();
+		*/
+
+		rtc::InitializeSSL();
+
+		// Initializes the conductor.
+		g_cond = new DirectXMultiPeerConductor(fullServerConfig, device);
+
+		// Handles data channel messages.
+		std::function<void(int, const string&)> dataChannelMessageHandler([&](int peerId, const std::string& message)
+		{
+			// Returns if the remote peer data hasn't been initialized.
+			if (g_remotePeersData.find(peerId) == g_remotePeersData.end())
+			{
+				return;
+			}
+
+			char type[256];
+			char body[1024];
+			Json::Reader reader;
+			Json::Value msg = NULL;
+			reader.parse(message, msg, false);
+			std::shared_ptr<RemotePeerData> peerData = g_remotePeersData[peerId];
+
+			if (msg.isMember("type") && msg.isMember("body"))
+			{
+				strcpy(type, msg.get("type", "").asCString());
+				strcpy(body, msg.get("body", "").asCString());
+			}
+
+
+
+
+			MouseEventCallback(type, body);
+		});
+		
+		// Sets data channel message handler.
+		g_cond->SetDataChannelMessageHandler(dataChannelMessageHandler);
+
+		g_cond->StartLogin("http://localhost", 3000);
+				
+		MSG msg = { 0 };
+		while (WM_QUIT != msg.message)
+		{
+			if (PeekMessage(&msg, NULL, 0, 0, PM_REMOVE))
+			{				
+				{
+					TranslateMessage(&msg);
+					DispatchMessage(&msg);
+				}
+			}			
+		}
 	}
-}
-
-#else // TEST_RUNNER
-
-//--------------------------------------------------------------------------------------
-// Called every time the application receives a message
-//--------------------------------------------------------------------------------------
-LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
-{
-	PAINTSTRUCT ps;
-	HDC hdc;
-
-	switch (message)
+	
+	__declspec(dllexport) void __stdcall  RenderFrame(ID3D11Device* device, ID3D11Texture2D* rt)
 	{
-	case WM_PAINT:
-		hdc = BeginPaint(hWnd, &ps);
-		EndPaint(hWnd, &ps);
-		break;
+		if (!g_cond)
+			return;
 
-	case WM_DESTROY:
-		PostQuitMessage(0);
-		break;
+		for each (auto pair in g_cond->Peers())
+		{
+			auto peer = (DirectXPeerConductor*)pair.second.get();
 
-		// Note that this tutorial does not handle resizing (WM_SIZE) requests,
-		// so we created the window without the resize border.
+			// Retrieves remote peer data from map, create new if needed.
+			std::shared_ptr<RemotePeerData> peerData;
+			auto it = g_remotePeersData.find(peer->Id());
+			if (it == g_remotePeersData.end())
+			{
+				peerData.reset(new RemotePeerData());
+				peerData->startTick = GetTickCount64();
+				g_remotePeersData[peer->Id()] = peerData;
+			}
+			else
+			{
+				peerData = it->second;
+			}
 
-	default:
-		return DefWindowProc(hWnd, message, wParam, lParam);
+			// FPS limiter.
+			ULONGLONG timeElapsed = GetTickCount64() - peerData->tick;
+			peerData->tick = GetTickCount64() - timeElapsed;
+			peer->SendFrame(rt);
+		}
 	}
-
-	return 0;
 }
-
-//--------------------------------------------------------------------------------------
-// Registers class and creates window
-//--------------------------------------------------------------------------------------
-HRESULT InitWindow(HINSTANCE hInstance, int nCmdShow)
-{
-	// Registers class.
-	WNDCLASSEX wcex = { 0 };
-	wcex.cbSize = sizeof(WNDCLASSEX);
-	wcex.style = CS_HREDRAW | CS_VREDRAW;
-	wcex.lpfnWndProc = WndProc;
-	wcex.cbClsExtra = 0;
-	wcex.cbWndExtra = 0;
-	wcex.hInstance = hInstance;
-	wcex.hIcon = 0;
-	wcex.hCursor = LoadCursor(nullptr, IDC_ARROW);
-	wcex.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);
-	wcex.lpszMenuName = nullptr;
-	wcex.lpszClassName = L"SpinningCubeClass";
-	if (!RegisterClassEx(&wcex))
-	{
-		return E_FAIL;
-	}
-
-	// Creates window.
-	RECT rc = { 0, 0, 1280, 720 };
-	AdjustWindowRect(&rc, WS_OVERLAPPEDWINDOW, FALSE);
-	g_hWnd = CreateWindow(
-		L"SpinningCubeClass",
-		L"SpinningCube",
-		WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX,
-		CW_USEDEFAULT,
-		CW_USEDEFAULT,
-		rc.right - rc.left,
-		rc.bottom - rc.top,
-		nullptr,
-		nullptr,
-		hInstance,
-		nullptr);
-
-	if (!g_hWnd)
-	{
-		return E_FAIL;
-	}
-
-	ShowWindow(g_hWnd, nCmdShow);
-
-	return S_OK;
-}
-
-//--------------------------------------------------------------------------------------
-// Render the frame
-//--------------------------------------------------------------------------------------
-void Render()
-{
-	g_cubeRenderer->UpdateView(
-		g_cubeRenderer->GetDefaultEyeVector(),
-		g_cubeRenderer->GetDefaultLookAtVector(),
-		g_cubeRenderer->GetDefaultUpVector());
-
-	g_cubeRenderer->Render();
-	g_deviceResources->Present();
-}
-
-#endif // TEST_RUNNER
 
 //--------------------------------------------------------------------------------------
 // Entry point to the program. Initializes everything and goes into a message processing 
 // loop. Idle time is used to render the scene.
 //--------------------------------------------------------------------------------------
-int WINAPI wWinMain(
-	_In_ HINSTANCE hInstance,
-	_In_opt_ HINSTANCE hPrevInstance,
-	_In_ LPWSTR lpCmdLine,
-	_In_ int nCmdShow)
+BOOL WINAPI DllMain(
+	HINSTANCE hinstDLL,  // handle to DLL module
+	DWORD fdwReason,     // reason for calling function
+	LPVOID lpReserved)  // reserved
 {
-	UNREFERENCED_PARAMETER(hPrevInstance);
-	UNREFERENCED_PARAMETER(lpCmdLine);
-
-#ifdef TEST_RUNNER
-	if (FAILED(InitWindow(hInstance, nCmdShow)))
+	// Perform actions based on the reason for calling.
+	switch (fdwReason)
 	{
-		return 0;
+	case DLL_PROCESS_ATTACH:
+		// Initialize once for each new process.
+		// Return FALSE to fail DLL load.
+		break;
+
+	case DLL_THREAD_ATTACH:
+		// Do thread-specific initialization.
+		break;
+
+	case DLL_THREAD_DETACH:
+		// Do thread-specific cleanup.
+		break;
+
+	case DLL_PROCESS_DETACH:
+		// Perform any necessary cleanup.
+		break;
 	}
-
-	// Initializes the device resources.
-	g_deviceResources = new DeviceResources();
-	g_deviceResources->SetWindow(g_hWnd);
-
-	// Initializes the cube renderer.
-	g_cubeRenderer = new CubeRenderer(g_deviceResources);
-
-	RECT rc;
-	GetClientRect(g_hWnd, &rc);
-	UINT width = rc.right - rc.left;
-	UINT height = rc.bottom - rc.top;
-
-	// Creates and initializes the video test runner library.
-	g_videoTestRunner = new VideoTestRunner(
-		g_deviceResources->GetD3DDevice(),
-		g_deviceResources->GetD3DDeviceContext());
-
-	g_videoTestRunner->StartTestRunner(g_deviceResources->GetSwapChain());
-
-	// Main message loop.
-	MSG msg = { 0 };
-	while (WM_QUIT != msg.message)
-	{
-		if (PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE))
-		{
-			TranslateMessage(&msg);
-			DispatchMessage(&msg);
-		}
-		else
-		{
-			Render();
-
-			if (g_videoTestRunner->TestsComplete())
-			{
-				break;
-			}
-
-			g_videoTestRunner->TestCapture();
-			if (g_videoTestRunner->IsNewTest())
-			{
-				delete g_cubeRenderer;
-				g_cubeRenderer = new CubeRenderer(g_deviceResources);
-			}
-		}
-	}
-
-	delete g_cubeRenderer;
-	delete g_deviceResources;
-
-	return (int)msg.wParam;
-#else // TEST_RUNNER
-
-	// setup the config parsers
-	ConfigParser::ConfigureConfigFactories();
-
-	auto serverConfig = GlobalObject<ServerConfig>::Get();
-
-	if (!serverConfig->server_config.system_service)
-	{
-		return AppMain(FALSE);
-	}
-	else
-	{
-		StartRenderService();
-		return 0;
-	}
-#endif // TEST_RUNNER
+	return TRUE;  // Successful DLL_PROCESS_ATTACH.
 }
+
